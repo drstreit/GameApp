@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net5.0</TargetFramework>
+
+    <LangVersion>9.0</LangVersion>
+
+    <ApplicationIcon />
+
+    <StartupObject />
+
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="5.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Logger\ALogger.csproj" />
+  </ItemGroup>
+  
+</Project>

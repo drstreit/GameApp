@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Sebastian Streit",
+  "classifications": [ "Common", "Console", "C#9" ],
+  "identity": "Default.AsyncProject",
+  "name": "Default: async console project",
+  "shortName": "consoleasync",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  }
+}
