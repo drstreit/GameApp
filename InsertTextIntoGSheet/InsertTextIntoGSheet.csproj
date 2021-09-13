@@ -13,11 +13,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Google.Apis.Sheets.v4" Version="1.55.0.2371" />
     <PackageReference Include="System.Configuration.ConfigurationManager" Version="5.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Logger\ALogger.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="credentials.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   
 </Project>

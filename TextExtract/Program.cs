@@ -17,7 +17,6 @@ namespace TextExtract
 {
     class Program
     {
-
         static void Main()
         {
             var stringQueue = new ConcurrentQueue<string>();
@@ -70,7 +69,7 @@ namespace TextExtract
                         File.WriteAllTextAsync($"{path}{DateTime.Now.Ticks}.txt", sb.ToString());
                 }
                 // full round - wait 5 sec for next
-                log.AddMessage(new LogMessage(Levels.Success, $"Waiting 5 sec to look for new files..."));
+                log.AddMessage(new LogMessage(Levels.Success, $"Waiting 5 sec to look for new BMP files..."));
                 Thread.Sleep(5000);
             }
             // clean up
@@ -88,33 +87,41 @@ namespace TextExtract
             Ocr.Language = OcrLanguage.English;
             
             var start = DateTime.Now;
-            if (File.Exists(filePath))
+            try
             {
-                Bitmap b = new(filePath);
+                if (File.Exists(filePath))
+                {
+                    Bitmap b = new(filePath);
 
-                #region Process Image
-                Percentage brightness = new(30);
-                Percentage contrast = new(100);
+                    #region Process Image
+                    Percentage brightness = new(30);
+                    Percentage contrast = new(100);
 
-                Console.WriteLine($"Processing '{filePath}' - adjusting brightness and contrast...");
-                using MagickImage image = new(new MagickFactory().Image.Create(b));
-                // Dispose asap to allow file renaming
-                b.Dispose();
-                // rename file to remove it from round
-                new FileInfo(filePath).MoveTo(filePath + ".bak");
-                // time intensive tasks
-                image.BrightnessContrast(brightness, contrast);
-                image.ColorSpace = ColorSpace.Gray;
-                using var Input = new OcrInput(image.ToBitmap());
-                var Result = Ocr.Read(Input);
-                // result saving
-                stringQueue.Enqueue(Result.Text);
-                //Result.SaveAsTextFile(filePath + $".txt");
-                #endregion
-                // report
-                var elapsed = DateTime.Now.Ticks - start.Ticks;
-                log.AddMessage(new LogMessage(Levels.Log, $"Processed '{filePath}' in {new TimeSpan(DateTime.Now.Ticks - start.Ticks).TotalSeconds} sec"));
+                    Console.WriteLine($"Processing '{filePath}' - adjusting brightness and contrast...");
+                    using MagickImage image = new(new MagickFactory().Image.Create(b));
+                    // Dispose asap to allow file renaming
+                    b.Dispose();
+                    // rename file to remove it from round
+                    new FileInfo(filePath).MoveTo(filePath + ".bak");
+                    // time intensive tasks
+                    image.BrightnessContrast(brightness, contrast);
+                    image.ColorSpace = ColorSpace.Gray;
+                    using var Input = new OcrInput(image.ToBitmap());
+                    var Result = Ocr.Read(Input);
+                    // result saving
+                    if (!string.IsNullOrWhiteSpace(Result.Text))
+                        stringQueue.Enqueue(Result.Text.Replace("\r\n\r\n", "\r\n"));
+                    #endregion
+                    // report
+                    var elapsed = DateTime.Now.Ticks - start.Ticks;
+                    log.AddMessage(new LogMessage(Levels.Log, $"Processed '{filePath}' in {new TimeSpan(DateTime.Now.Ticks - start.Ticks).TotalSeconds} sec"));
+                }
             }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex.Message);
+            }
+            
             return true;
         }
     }
