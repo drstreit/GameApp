@@ -1,5 +1,5 @@
 # GameApp
-Capture game screenshots into a dir via global hotkey and process that information to a GSheet for further processing
+Capture game screenshots into a dir via global hotkey and process that information to a GSheet for further processing<br/>
 The application uses several Console apps to perform different tasks:
 ConsoleMain allows you to pick a running applciation to define the screen capture area. E.g. start Notepad and pull/resize it on top of your game windos (needs to run as "Windowed/Fullscreen" (New World default mode)) to define exactrly the area to capture - e.g. the list of trades. A global hotkey (CTRL-Tab) will be installed that triggers the capture of that area from a game. Status: Finished, needs polish.
 TextExtract will monitor a directory (currently: d:\tmp) for BMP files. It will extract text found there (using Tesseract) and write that text into a text file. Status: Finished, needs polish.
