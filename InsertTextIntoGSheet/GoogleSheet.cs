@@ -12,6 +12,8 @@ using System.IO;
 using System.Threading;
 using System.Configuration;
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using ALogger;
 
 namespace InsertTextIntoGSheet
 {
@@ -19,9 +21,12 @@ namespace InsertTextIntoGSheet
     {
         private static readonly string[] Scopes = { SheetsService.Scope.Spreadsheets };
         private SheetsService service;
+        private readonly ConcurrentQueue<TradeResult> GSheetItemQueue = new();
+        private readonly Logger _log;
 
-        public GoogleSheet()
+        public GoogleSheet(Logger log)
         {
+            _log = log;
             SetGoogleService();
         }
 
@@ -69,7 +74,7 @@ namespace InsertTextIntoGSheet
         {
             var range = $"{ConfigurationManager.AppSettings["SheetName"]}!A:C";
             //SpreadsheetsResource.ValuesResource.GetRequest requestRead =
-            //       service.Spreadsheets.Values.Get(ConfigurationManager.AppSettings["SheetName"], range);
+            //       service.Spreadsheets.Values.Get(ConfigurationManager.AppSettings["TradeManSheet"], range);
             //int numberOfRows = requestRead.Execute().Values.Count + 1;
 
             // define formalas
@@ -96,6 +101,68 @@ namespace InsertTextIntoGSheet
                 return true;
             else
                 return false;
+        }
+
+        public void GetPrices()
+        {
+            long action(object obj)
+            {
+                var range = $"{obj}!A:C";
+                long h = 0;
+                SpreadsheetsResource.ValuesResource.GetRequest requestRead =
+                       service.Spreadsheets.Values.Get(ConfigurationManager.AppSettings["TradeManSheet"], range);
+                var items = requestRead.Execute().Values;
+                _log.AddMessage(new LogMessage(Levels.Log, $"Received {items.Count} lines items from '{obj}'"));
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (items[i].Count == 3 && double.TryParse((string)items[i][2], out double d))
+                    {
+                        GSheetItemQueue.Enqueue(new()
+                        {
+                            Price = d,
+                            Name = items[i][1].ToString(),
+                            Tier = items[i][0].ToString(),
+                            PriceCell = $"{obj}!C{i+1}",
+                        });
+                        h++;
+                    }
+                }
+                _log.AddMessage(new LogMessage(Levels.Success, $"Pushed {h} trade items from '{obj}' to queue"));
+                return items.Count;
+            }
+
+            string[] sheets = new string[] { "Weapons", "Tools", "Apparel", "Resources", "Consumables", "Ammo" };
+            var tasks = new List<Task<long>>();
+
+            foreach (var sheet in sheets)
+            {
+                tasks.Add(Task<long>.Factory.StartNew(action, sheet));
+            }
+            // wait for finish
+            try
+            {
+                // Wait for all the tasks to finish.
+                Task.WaitAll(tasks.ToArray());
+            }
+            catch (AggregateException e)
+            {
+                for (int j = 0; j < e.InnerExceptions.Count; j++)
+                {
+                    _log.AddMessage(new LogMessage(Levels.Error, "GetPrices error: " + e.InnerExceptions[j]));
+                    Debug.WriteLine(e.InnerExceptions[j]);  
+                }
+            }          
+        }
+
+        public void DeletePrices()
+        {
+            // take GSheetItemQueue and set all prices to zero
+            throw new NotImplementedException();
+        }
+        public void UpdatePrices()
+        {
+            // take GSheetItemQueue and update all prices
+            throw new NotImplementedException();
         }
     }
 }

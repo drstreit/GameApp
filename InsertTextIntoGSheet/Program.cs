@@ -24,9 +24,11 @@ namespace InsertTextIntoGSheet
             log.AddMessage(new LogMessage(Levels.Log, "Press 'ESC' to stop program"));
 
             // check GSheet credentials and availability
-            GoogleSheet _googleSheet = new();
+            GoogleSheet _googleSheet = new(log);
             if (!_googleSheet.CheckSheet())
                 throw new Exception($"Please create Google sheet '{ConfigurationManager.AppSettings["TradeManSheet"]}' first");
+            // Sheet exists - now get all values
+            _googleSheet.GetPrices();
 
             bool action(object obj)
             {
