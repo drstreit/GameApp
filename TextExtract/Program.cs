@@ -26,47 +26,27 @@ namespace TextExtract
         {
             var finalPriceList = new ConcurrentQueue<KeyValuePair<string, double>>();
             var path = ConfigurationManager.AppSettings["StoragePath"];
-            var source = new CancellationTokenSource();
+            CancellationTokenSource source = new();
+            CancellationToken token = source.Token;
+            ParallelOptions parallelOptions = new();
+            parallelOptions.MaxDegreeOfParallelism = Environment.ProcessorCount;
+            parallelOptions.CancellationToken = token;
 
             var log = new Logger(source);
             log.AddMessage(new LogMessage(Levels.Log, "Press 'ESC' to stop program"));
 
-            bool action(object obj)
-            {
-                //File path 
-                FileInfo fileInfo = new((string)obj);
-                bool result = false;
-                // min 5 sec old to avoid conflicts
-                if (new TimeSpan(DateTime.Now.Ticks - fileInfo.CreationTime.Ticks).TotalSeconds > 5)
-                    ProcessWithWindowsOcr(fileInfo.FullName, source, log, finalPriceList);
-
-                return result;
-            }
-
-            var tasks = new List<Task<bool>>();
-
             while (!(Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Escape))
-            { 
-                foreach (string file in Directory.GetFiles(path, "*.bmp"))
-                    tasks.Add(Task<bool>.Factory.StartNew(action, file));
-                // wait for finish
-                try
+            {
+                Parallel.ForEachAsync(Directory.GetFiles(path, "*.bmp"), parallelOptions, async (file, token) =>
                 {
-                    // Wait for all the tasks to finish.
-                    Task.WaitAll(tasks.ToArray());
-                }
-                catch (AggregateException e)
-                {
-                    for (int j = 0; j < e.InnerExceptions.Count; j++)
-                        log.AddMessage(new LogMessage(Levels.Error, e.InnerExceptions[j].ToString()));
-                }
+                    //File path 
+                    FileInfo fileInfo = new(file);
+                    // min 5 sec old to avoid conflicts
+                    if (new TimeSpan(DateTime.Now.Ticks - fileInfo.CreationTime.Ticks).TotalSeconds > 5)
+                        await ProcessWithWindowsOcr(fileInfo.FullName, source, log, finalPriceList);
+                });
+
                 // save text
-                /**
-                How to de-serialize it back...
-                ConcurrentQueue<KeyValuePair<string, double>> deSerializedList = 
-                    (ConcurrentQueue<KeyValuePair<string, double>>)JsonSerializer.Deserialize(jsonString, 
-                    typeof(ConcurrentQueue<KeyValuePair<string, double>>));
-                **/
                 if (!finalPriceList.IsEmpty)
                 {
                     string txtFile = $"{path}{DateTime.Now.Ticks}.txt";
@@ -83,7 +63,7 @@ namespace TextExtract
             source.Cancel();
             log.Flush();
         }
-        private async static void ProcessWithWindowsOcr(string filePath, CancellationTokenSource source, Logger log, ConcurrentQueue<KeyValuePair<string, double>> finalPriceList)
+        private async static Task ProcessWithWindowsOcr(string filePath, CancellationTokenSource source, Logger log, ConcurrentQueue<KeyValuePair<string, double>> finalPriceList)
         {
             var ocrLanguage = new Language("en");
             OcrEngine ocrEngine = OcrEngine.TryCreateFromLanguage(ocrLanguage);
