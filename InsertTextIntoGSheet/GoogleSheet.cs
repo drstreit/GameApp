@@ -153,16 +153,5 @@ namespace InsertTextIntoGSheet
                 }
             }          
         }
-
-        public void DeletePrices()
-        {
-            // take GSheetItemQueue and set all prices to zero
-            throw new NotImplementedException();
-        }
-        public void UpdatePrices()
-        {
-            // take GSheetItemQueue and update all prices
-            throw new NotImplementedException();
-        }
     }
 }

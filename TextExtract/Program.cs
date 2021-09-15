@@ -1,6 +1,5 @@
 using ALogger;
 using ImageMagick;
-using IronOcr;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -12,6 +11,12 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Windows.Media.Ocr;
+using Windows.Globalization;
+using Windows.Graphics.Imaging;
+using System.Drawing.Imaging;
+using Windows.Foundation;
+using System.Text.Json;
 
 namespace TextExtract
 {
@@ -19,7 +24,7 @@ namespace TextExtract
     {
         static void Main()
         {
-            var stringQueue = new ConcurrentQueue<string>();
+            var finalPriceList = new ConcurrentQueue<KeyValuePair<string, double>>();
             var path = ConfigurationManager.AppSettings["StoragePath"];
             var source = new CancellationTokenSource();
 
@@ -33,7 +38,7 @@ namespace TextExtract
                 bool result = false;
                 // min 5 sec old to avoid conflicts
                 if (new TimeSpan(DateTime.Now.Ticks - fileInfo.CreationTime.Ticks).TotalSeconds > 5)
-                    result = Processing(fileInfo.FullName, source, log, stringQueue);
+                    ProcessWithWindowsOcr(fileInfo.FullName, source, log, finalPriceList);
 
                 return result;
             }
@@ -43,9 +48,7 @@ namespace TextExtract
             while (!(Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Escape))
             { 
                 foreach (string file in Directory.GetFiles(path, "*.bmp"))
-                {
                     tasks.Add(Task<bool>.Factory.StartNew(action, file));
-                }
                 // wait for finish
                 try
                 {
@@ -55,49 +58,53 @@ namespace TextExtract
                 catch (AggregateException e)
                 {
                     for (int j = 0; j < e.InnerExceptions.Count; j++)
-                    {
                         log.AddMessage(new LogMessage(Levels.Error, e.InnerExceptions[j].ToString()));
-                    }
                 }
                 // save text
-                if (!stringQueue.IsEmpty)
+                /**
+                How to de-serialize it back...
+                ConcurrentQueue<KeyValuePair<string, double>> deSerializedList = 
+                    (ConcurrentQueue<KeyValuePair<string, double>>)JsonSerializer.Deserialize(jsonString, 
+                    typeof(ConcurrentQueue<KeyValuePair<string, double>>));
+                **/
+                if (!finalPriceList.IsEmpty)
                 {
-                    var sb = new StringBuilder();
-                    while (stringQueue.TryDequeue(out string s)) 
-                        if (!string.IsNullOrEmpty(s)) _ = sb.AppendLine(s);
-                    if (sb.Length > 0)
-                        File.WriteAllTextAsync($"{path}{DateTime.Now.Ticks}.txt", sb.ToString());
+                    string txtFile = $"{path}{DateTime.Now.Ticks}.txt";
+                    File.WriteAllText(txtFile
+                        , JsonSerializer.Serialize(finalPriceList));
+                    log.AddMessage(new LogMessage(Levels.Success, $"Wrote textfile {txtFile}, containing {finalPriceList.Count} trade items"));
+                    finalPriceList.Clear();
                 }
                 // full round - wait 5 sec for next
-                log.AddMessage(new LogMessage(Levels.Success, $"Waiting 5 sec to look for new BMP files..."));
+                log.AddMessage(new LogMessage(Levels.Log, $"Waiting 5 sec to look for new BMP files..."));
                 Thread.Sleep(5000);
             }
             // clean up
             source.Cancel();
             log.Flush();
         }
-
-        private static bool Processing(string filePath, CancellationTokenSource source, Logger log, ConcurrentQueue<string> stringQueue)
+        private async static void ProcessWithWindowsOcr(string filePath, CancellationTokenSource source, Logger log, ConcurrentQueue<KeyValuePair<string, double>> finalPriceList)
         {
-            var Ocr = new IronTesseract();
-            Ocr.Configuration.WhiteListCharacters = ".1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-            Ocr.Configuration.PageSegmentationMode = TesseractPageSegmentationMode.SingleColumn;
-            Ocr.Configuration.TesseractVersion = TesseractVersion.Tesseract5;
-            Ocr.Configuration.EngineMode = TesseractEngineMode.TesseractOnly;
-            Ocr.Language = OcrLanguage.English;
-            
-            var start = DateTime.Now;
+            var ocrLanguage = new Language("en");
+            OcrEngine ocrEngine = OcrEngine.TryCreateFromLanguage(ocrLanguage);
+
+            if (ocrEngine == null)
+            {
+                log.AddMessage(new LogMessage(Levels.Error, $"Language {ocrLanguage} is not supported as Ocr language on this machine - install via Windows Language/...add Language"));
+                return;
+            }
             try
             {
                 if (File.Exists(filePath))
                 {
+                    List<string> queue = new();
                     Bitmap b = new(filePath);
 
                     #region Process Image
                     Percentage brightness = new(30);
                     Percentage contrast = new(100);
-
-                    Console.WriteLine($"Processing '{filePath}' - adjusting brightness and contrast...");
+                    Stopwatch watch = new();
+                    watch.Start();
                     using MagickImage image = new(new MagickFactory().Image.Create(b));
                     // Dispose asap to allow file renaming
                     b.Dispose();
@@ -106,23 +113,46 @@ namespace TextExtract
                     // time intensive tasks
                     image.BrightnessContrast(brightness, contrast);
                     image.ColorSpace = ColorSpace.Gray;
-                    using var Input = new OcrInput(image.ToBitmap());
-                    var Result = Ocr.Read(Input);
-                    // result saving
-                    if (!string.IsNullOrWhiteSpace(Result.Text))
-                        stringQueue.Enqueue(Result.Text.Replace("\r\n\r\n", "\r\n"));
+                    watch.Stop();
+                    log.AddMessage(new LogMessage(Levels.Success, $"Found '{filePath}' - image processed within {watch.Elapsed.TotalSeconds} sec"));
                     #endregion
-                    // report
-                    var elapsed = DateTime.Now.Ticks - start.Ticks;
-                    log.AddMessage(new LogMessage(Levels.Log, $"Processed '{filePath}' in {new TimeSpan(DateTime.Now.Ticks - start.Ticks).TotalSeconds} sec"));
+
+                    #region Ocr
+                    // Ocr
+                    watch.Restart();
+                    SoftwareBitmap bitmap = await BitmapToSoftwareBitmap(image.ToBitmap());
+                    var ocrResult = await ocrEngine.RecognizeAsync(bitmap);
+                    // result saving
+                    foreach (var line in ocrResult.Lines)
+                        queue.Add(line.Text);
+
+                    for (var i = 0; i < queue.Count / 2; i++)
+                    {
+                        string name = queue[i].ToString();
+                        if (double.TryParse(queue[i + (queue.Count / 2)], out double price))
+                            finalPriceList.Enqueue(new KeyValuePair<string, double>(queue[i].Trim(), price));
+                    }
+                    log.AddMessage(new LogMessage(Levels.Success, $"Ocr found {queue.Count / 2} trade items withinin {watch.Elapsed.TotalSeconds} sec"));
+                    queue.Clear();
+                    #endregion
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
             }
-            
-            return true;
+        }
+
+        private async static Task<SoftwareBitmap> BitmapToSoftwareBitmap(Bitmap bitmap)
+        {
+            SoftwareBitmap softwareBitmap;
+            using (Windows.Storage.Streams.InMemoryRandomAccessStream stream = new())
+            {
+                bitmap.Save(stream.AsStream(), ImageFormat.Jpeg);//choose the specific image format by your own bitmap source
+                BitmapDecoder decoder = await BitmapDecoder.CreateAsync(stream);
+                softwareBitmap = await decoder.GetSoftwareBitmapAsync();
+            }
+            return softwareBitmap;
         }
     }
 }

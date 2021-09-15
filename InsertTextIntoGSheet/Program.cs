@@ -6,6 +6,7 @@ using System.Configuration;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -15,7 +16,6 @@ namespace InsertTextIntoGSheet
     {
         static void Main()
         {
-            var stringQueue = new ConcurrentQueue<string>();
             var kvpQueue = new ConcurrentQueue<KeyValuePair<string, double>>();
             var path = ConfigurationManager.AppSettings["StoragePath"];
             var source = new CancellationTokenSource();
@@ -28,7 +28,7 @@ namespace InsertTextIntoGSheet
             if (!_googleSheet.CheckSheet())
                 throw new Exception($"Please create Google sheet '{ConfigurationManager.AppSettings["TradeManSheet"]}' first");
             // Sheet exists - now get all values
-            _googleSheet.GetPrices();
+            //_googleSheet.GetPrices();
 
             bool action(object obj)
             {
@@ -37,7 +37,7 @@ namespace InsertTextIntoGSheet
                 bool result = false;
                 // min 5 sec old to avoid conflicts
                 if (new TimeSpan(DateTime.Now.Ticks - fileInfo.CreationTime.Ticks).TotalSeconds > 5)
-                    result = ReadFiles(fileInfo.FullName, source, log, stringQueue);
+                    ReadFiles(fileInfo.FullName, log, kvpQueue);
 
                 return result;
             }
@@ -47,9 +47,7 @@ namespace InsertTextIntoGSheet
             while (!(Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Escape))
             {
                 foreach (string file in Directory.GetFiles(path, "*.txt"))
-                {
                     tasks.Add(Task<bool>.Factory.StartNew(action, file));
-                }
                 // wait for finish
                 try
                 {
@@ -59,17 +57,8 @@ namespace InsertTextIntoGSheet
                 catch (AggregateException e)
                 {
                     for (int j = 0; j < e.InnerExceptions.Count; j++)
-                    {
                         log.AddMessage(new LogMessage(Levels.Error, e.InnerExceptions[j].ToString()));
-                    }
                 }
-                // extract text
-                if (stringQueue.IsEmpty)
-                    continue;
-                ExtractTextToKVP(stringQueue, kvpQueue);
-                log.AddMessage(new LogMessage(Levels.Log, $"Extracted {kvpQueue.Count} trade items with prices from files"));
-                stringQueue.Clear();
-                //var x = (from c in kvpQueue orderby c.Key ascending select c).ToList();
                 // write to GSheet
                 if (!kvpQueue.IsEmpty && _googleSheet.AppendValues(kvpQueue))
                 {
@@ -85,63 +74,35 @@ namespace InsertTextIntoGSheet
             log.Flush();
         }
 
-
-        private static void ExtractTextToKVP(ConcurrentQueue<string> stringQueue, ConcurrentQueue<KeyValuePair<string, double>> kvpQueue)
-        {
-            if (!stringQueue.IsEmpty)
+            private async static void ReadFiles(string filePath, Logger log, ConcurrentQueue<KeyValuePair<string, double>> kvpQueue)
             {
-                foreach (var item in stringQueue)
-                {
-                    // split on last space
-                    var indexOfLastEmpty = item.Trim().LastIndexOf(" ");
-                    if (indexOfLastEmpty == -1)
-                        continue;
-                    // split to last space => trade item
-                    string tradeItem = item.Substring(0, indexOfLastEmpty).Trim();
-                    if (string.IsNullOrWhiteSpace(tradeItem))
-                        continue;
-                    // split from last to end => number
-                    var priceText = item[indexOfLastEmpty..].Trim();
-                    if (!double.TryParse(priceText, out double price))
-                        continue;
-                    // add kvp to queue
-                    kvpQueue.Enqueue(new KeyValuePair<string, double>(tradeItem, price));
-                }
-            }
-        }
-
-        private static bool ReadFiles(string filePath, CancellationTokenSource source, Logger log, ConcurrentQueue<string> stringQueue)
-        {
             try
             {
                 if (File.Exists(filePath))
                 {
+                    Stopwatch watch = new();
+                    watch.Start();
                     var start = DateTime.Now;
                     // load text file
-                    using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
-                    using var sr = new StreamReader(fs, Encoding.UTF8);
-                    string content = sr.ReadToEnd();
-                    foreach (string item in content.Split(Environment.NewLine,
-                            StringSplitOptions.RemoveEmptyEntries))
-                    {
-                        stringQueue.Enqueue(item);
-                    }
-                    sr.Close();
-                    sr.Dispose();
-                    fs.Close();
-                    fs.Dispose();
+                    string content = await File.ReadAllTextAsync(filePath);
                     // rename file
                     new FileInfo(filePath).MoveTo(filePath + ".bak");
-                    // report
-                    var elapsed = DateTime.Now.Ticks - start.Ticks;
-                    log.AddMessage(new LogMessage(Levels.Log, $"Processed '{filePath}' in {new TimeSpan(DateTime.Now.Ticks - start.Ticks).TotalSeconds} sec"));
+                    // fill queue
+                    var tmpQueue = (ConcurrentQueue<KeyValuePair<string, double>>)JsonSerializer.Deserialize(
+                        content,
+                        typeof(ConcurrentQueue<KeyValuePair<string, double>>)
+                    );
+                    while (tmpQueue.TryDequeue(out KeyValuePair<string, double> tmp))
+                        kvpQueue.Enqueue(tmp);
+                    watch.Stop();
+                    if (tmpQueue.Count != 0)
+                        log.AddMessage(new LogMessage(Levels.Log, $"Added {tmpQueue.Count} items to '{filePath}' in {watch.ElapsedMilliseconds} ms"));
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
             }
-            return true;
         }
     }
 }
